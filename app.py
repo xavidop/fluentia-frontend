@@ -13,12 +13,12 @@ load_dotenv()
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+LITERAL_API_KEY = os.getenv("LITERAL_API_KEY")
 
 print(ELEVENLABS_API_KEY)
 print(ELEVENLABS_VOICE_ID)
 print(OPENAI_API_KEY)
-
-
+print(LITERAL_API_KEY)
 
 cl.instrument_openai()
 
