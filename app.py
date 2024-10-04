@@ -14,11 +14,13 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LITERAL_API_KEY = os.getenv("LITERAL_API_KEY")
+SERVER_URL = os.getenv("SERVER_URL")
 
 print(ELEVENLABS_API_KEY)
 print(ELEVENLABS_VOICE_ID)
 print(OPENAI_API_KEY)
 print(LITERAL_API_KEY)
+print(SERVER_URL)
 
 cl.instrument_openai()
 
@@ -38,9 +40,21 @@ async def speech_to_text(audio_file):
 
 @cl.step(type="tool", name="AI Generation")
 async def generate_text_answer(transcription):
+    url = f"{SERVER_URL}/v1/interact"
+    headers = {
+        "Content-Type": "application/json",
+        }
 
-    return transcription
-
+    data = {
+        "input": transcription,
+        "language": "es",
+        "sessionId": "1234",
+    }
+    print("URL: "+url)
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        response = await client.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Ensure we notice bad responses
+        return response.json()["result"]["nextQuestion"]
 
 @cl.step(type="tool", name="Text to Speech")
 async def text_to_speech(text: str, mime_type: str):
