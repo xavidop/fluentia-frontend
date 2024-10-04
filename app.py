@@ -1,13 +1,12 @@
 import os
 from io import BytesIO
 import httpx
-
 from openai import AsyncOpenAI
-
 from chainlit.element import ElementBased
 import chainlit as cl
-
 from dotenv import load_dotenv
+import uuid
+
 load_dotenv()
 
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
@@ -29,6 +28,17 @@ client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 if not ELEVENLABS_API_KEY or not ELEVENLABS_VOICE_ID or not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY, ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID must be set")
 
+@cl.password_auth_callback
+def auth_callback(username: str, password: str):
+    # Fetch the user matching username from your database
+    # and compare the hashed password with the value stored in the database
+    if "voiceflow" in username or "princeton" in username: 
+        return cl.User(
+            identifier=username, metadata={"role": "admin", "provider": "credentials"}
+        )
+    else:
+        return None
+
 @cl.step(type="tool", name="Speech to Text")
 async def speech_to_text(audio_file):
     response = await client.audio.transcriptions.create(
@@ -40,6 +50,8 @@ async def speech_to_text(audio_file):
 
 @cl.step(type="tool", name="AI Generation")
 async def generate_text_answer(transcription):
+    user = cl.user_session.get("user")
+    sessionId = cl.user_session.get("id")
     url = f"{SERVER_URL}/v1/interact"
     headers = {
         "Content-Type": "application/json",
@@ -48,7 +60,8 @@ async def generate_text_answer(transcription):
     data = {
         "input": transcription,
         "language": "es",
-        "sessionId": "1234",
+        "userId": user.identifier,
+        "sessionId":  sessionId,
     }
     print("URL: "+url)
     async with httpx.AsyncClient(timeout=25.0) as client:
