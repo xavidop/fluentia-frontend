@@ -1,7 +1,5 @@
 FROM python:3.11
 
-ENV PORT=1000
-
 # Create a non-root user
 RUN useradd -m -u 1000 user
 
@@ -22,4 +20,4 @@ RUN pip install -r requirements.txt
 EXPOSE 1000
 
 # Command to run the application
-CMD ["chainlit", "run", "app.py", "--port", "$PORT"]
+CMD ["chainlit", "run", "app.py", "--port", "1000"]
