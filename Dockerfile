@@ -17,8 +17,5 @@ COPY --chown=user . .
 # Install dependencies
 RUN pip install -r requirements.txt
 
-# Render uses this section to expose ports
-EXPOSE 10000
-
 # Command to run the application
-CMD ["chainlit", "run", "app.py", "--port", "10000"]
+CMD ["chainlit", "run", "app.py", "--port", "8000", "--host", "0.0.0.0"]
