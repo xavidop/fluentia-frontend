@@ -28,6 +28,13 @@ client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 if not ELEVENLABS_API_KEY or not ELEVENLABS_VOICE_ID or not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY, ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID must be set")
 
+actions = [
+    cl.Action(name="Housing", value="1", description="Finding a Suitable House for Rent for Grad Students at a University"),
+    cl.Action(name="Educational Opportunities", value="2", description="Interview for Participation in a Cultural Program in the Yucatán Peninsula, Mexico"),
+    cl.Action(name="Health and Wellness", value="3", description="Discussing Health Issues at a University Health Facility in a Spanish-Speaking Country"),
+    cl.Action(name="Zoom Interview", value="4", description="virtual format of a Zoom interview practice session, highlighting the importance of clear communication in Spanish, preparation for professional settings, and useful feedback from the career counselor")
+]
+
 @cl.password_auth_callback
 def auth_callback(username: str, password: str):
     # Fetch the user matching username from your database
@@ -39,7 +46,6 @@ def auth_callback(username: str, password: str):
     else:
         return None
 
-@cl.step(type="tool", name="Speech to Text")
 async def speech_to_text(audio_file):
     response = await client.audio.transcriptions.create(
         model="whisper-1", file=audio_file
@@ -48,10 +54,10 @@ async def speech_to_text(audio_file):
     return response.text
 
 
-@cl.step(type="tool", name="AI Generation")
 async def generate_text_answer(transcription):
     user = cl.user_session.get("user")
     sessionId = cl.user_session.get("id")
+    scenraioId = cl.user_session.get("scenario")
     url = f"{SERVER_URL}/v1/interact"
     headers = {
         "Content-Type": "application/json",
@@ -59,17 +65,16 @@ async def generate_text_answer(transcription):
 
     data = {
         "input": transcription,
-        "language": "es",
         "userId": user.identifier,
         "sessionId":  sessionId,
+        "scenarioId": scenraioId,
     }
     print("URL: "+url)
     async with httpx.AsyncClient(timeout=25.0) as client:
         response = await client.post(url, json=data, headers=headers)
         response.raise_for_status()  # Ensure we notice bad responses
-        return response.json()["result"]["nextQuestion"]
+        return response.json()["result"]
 
-@cl.step(type="tool", name="Text to Speech")
 async def text_to_speech(text: str, mime_type: str):
     CHUNK_SIZE = 1024
 
@@ -108,12 +113,20 @@ async def text_to_speech(text: str, mime_type: str):
 @cl.on_chat_start
 async def start():
     await cl.Message(
-        content="Welcome to Fluencia. Press `P` to talk!"
+        content="Welcome to Fluencia. Press `p` to talk! Please select the scenario you want to practice.",
+        actions=actions
     ).send()
 
 
 @cl.on_audio_chunk
 async def on_audio_chunk(chunk: cl.AudioChunk):
+    scenario = cl.user_session.get("scenario")
+    if scenario is None:
+        await cl.Message(
+            content="Please select a scenario first.",
+            actions=actions
+        ).send()
+        return
     if chunk.isStart:
         buffer = BytesIO()
         # This is required for whisper to recognize the file type
@@ -150,9 +163,11 @@ async def on_audio_end(elements: list[ElementBased]):
         elements=[input_audio_el, *elements]
     ).send()
 
-    text_answer = await generate_text_answer(transcription)
+    result = await generate_text_answer(transcription)
+    fluencia_info = extract_fluencia_info(result)
+
     
-    output_name, output_audio = await text_to_speech(text_answer, audio_mime_type)
+    output_name, output_audio = await text_to_speech(result["nextInteraction"], audio_mime_type)
     
     output_audio_el = cl.Audio(
         name=output_name,
@@ -160,14 +175,88 @@ async def on_audio_end(elements: list[ElementBased]):
         mime=audio_mime_type,
         content=output_audio,
     )
-    answer_message = await cl.Message(content=text_answer).send()
+    answer_message = await cl.Message(
+        content=result["nextInteraction"],
+        elements=elements
+        ).send()
 
     answer_message.elements = [output_audio_el]
     await answer_message.update()
 
 @cl.on_message
 async def on_message(message: cl.Message):
-    text_answer = await generate_text_answer(message.content)
+
+    scenario = cl.user_session.get("scenario")
+    if scenario is None:
+        await cl.Message(
+            content="Please select a scenario first.",
+            actions=actions
+        ).send()
+        return
+
+    result = await generate_text_answer(message.content)
+    fluencia_info = extract_fluencia_info(result)
+    elements = [
+        cl.Text(name="Fluencia Information", content=fluencia_info, display="inline")
+    ]
     await cl.Message(
-        content=text_answer,
+        content=result["nextInteraction"],
+        elements=elements
     ).send()
+
+
+@cl.action_callback("Housing")
+async def on_action(action: cl.Action):
+
+    cl.user_session.set("scenario", action.value)
+
+    await cl.Message(
+        content="Perfect, let's start! Ask me a question about housing. in the language you want to practice.",
+    ).send()
+
+@cl.action_callback("Educational Opportunities")
+async def on_action(action: cl.Action):
+
+    cl.user_session.set("scenario", action.value)
+
+    await cl.Message(
+        content="Perfect, let's start! Ask me a question about Educational Opportunities. in the language you want to practice.",
+    ).send()
+
+@cl.action_callback("Health and Wellness")
+async def on_action(action: cl.Action):
+
+    cl.user_session.set("scenario", action.value)
+
+    await cl.Message(
+        content="Perfect, let's start! Ask me a question about Health and Wellness. in the language you want to practice.",
+    ).send()
+
+@cl.action_callback("Zoom Interview")
+async def on_action(action: cl.Action):
+
+    cl.user_session.set("scenario", action.value)
+
+    await cl.Message(
+        content="Perfect, let's start this interview! what is your name?. in the language you want to practice.",
+    ).send()
+
+def extract_fluencia_info(result):
+    fluencia_info = ""
+
+    if "errors" in result and result["errors"] !="":
+        fluencia_info += "Errors detected: "+result["errors"]
+
+    if "solution" in result and result["solution"] !="":
+        fluencia_info += "\nCorrect Sentence: "+result["solution"]
+
+    if "tip" in result and result["tip"] !="":
+        fluencia_info += "\nTip: "+result["tip"]
+
+    if "sentiment" in result and result["sentiment"] !="":
+        fluencia_info += "\nSentiment: "+result["sentiment"]
+
+    if "correctness" in result and result["correctness"] !="":
+        fluencia_info += "\nCorrectness: "+str(result["correctness"])
+    print(fluencia_info)
+    return fluencia_info
