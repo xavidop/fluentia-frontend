@@ -5,7 +5,6 @@ from openai import AsyncOpenAI
 from chainlit.element import ElementBased
 import chainlit as cl
 from dotenv import load_dotenv
-import uuid
 
 load_dotenv()
 
@@ -33,6 +32,10 @@ actions = [
     cl.Action(name="Educational Opportunities", value="2", description="Interview for Participation in a Cultural Program in the Yucatán Peninsula, Mexico"),
     cl.Action(name="Health and Wellness", value="3", description="Discussing Health Issues at a University Health Facility in a Spanish-Speaking Country"),
     cl.Action(name="Zoom Interview", value="4", description="virtual format of a Zoom interview practice session, highlighting the importance of clear communication in Spanish, preparation for professional settings, and useful feedback from the career counselor")
+]
+
+actionsSummary = [
+    cl.Action(name="Summary", value="summary", description="Summarize the conversation"),
 ]
 
 @cl.password_auth_callback
@@ -120,13 +123,7 @@ async def start():
 
 @cl.on_audio_chunk
 async def on_audio_chunk(chunk: cl.AudioChunk):
-    scenario = cl.user_session.get("scenario")
-    if scenario is None:
-        await cl.Message(
-            content="Please select a scenario first.",
-            actions=actions
-        ).send()
-        return
+
     if chunk.isStart:
         buffer = BytesIO()
         # This is required for whisper to recognize the file type
@@ -144,6 +141,14 @@ async def on_audio_chunk(chunk: cl.AudioChunk):
 
 @cl.on_audio_end
 async def on_audio_end(elements: list[ElementBased]):
+    scenario = cl.user_session.get("scenario")
+    if scenario is None:
+        await cl.Message(
+            content="Please select a scenario first.",
+            actions=actions
+        ).send()
+        return
+
     # Get the audio buffer from the session
     audio_buffer: BytesIO = cl.user_session.get("audio_buffer")
     audio_buffer.seek(0)  # Move the file pointer to the beginning
@@ -166,6 +171,9 @@ async def on_audio_end(elements: list[ElementBased]):
     result = await generate_text_answer(transcription)
     fluencia_info = extract_fluencia_info(result)
 
+    elements = [
+        cl.Text(name="Fluencia Information", content=fluencia_info, display="inline")
+    ]
     
     output_name, output_audio = await text_to_speech(result["nextInteraction"], audio_mime_type)
     
@@ -177,7 +185,8 @@ async def on_audio_end(elements: list[ElementBased]):
     )
     answer_message = await cl.Message(
         content=result["nextInteraction"],
-        elements=elements
+        elements=elements,
+        actions=actionsSummary
         ).send()
 
     answer_message.elements = [output_audio_el]
@@ -201,7 +210,8 @@ async def on_message(message: cl.Message):
     ]
     await cl.Message(
         content=result["nextInteraction"],
-        elements=elements
+        elements=elements,
+        actions=actionsSummary
     ).send()
 
 
@@ -240,6 +250,28 @@ async def on_action(action: cl.Action):
     await cl.Message(
         content="Perfect, let's start this interview! what is your name?. in the language you want to practice.",
     ).send()
+
+@cl.action_callback("Summary")
+async def on_action(action: cl.Action):
+
+    user = cl.user_session.get("user")
+    sessionId = cl.user_session.get("id")
+    url = f"{SERVER_URL}/v1/summarize"
+    headers = {
+        "Content-Type": "application/json",
+        }
+
+    data = {
+        "userId": user.identifier,
+        "sessionId":  sessionId,
+    }
+    print("URL: "+url)
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        response = await client.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Ensure we notice bad responses
+        await cl.Message(
+            content=response.json()["result"],
+        ).send()
 
 def extract_fluencia_info(result):
     fluencia_info = ""
