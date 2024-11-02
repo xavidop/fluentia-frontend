@@ -1,4 +1,4 @@
-# Fluencia Frontend
+# Fluentia Frontend
 
 To run this project you will need Python 3.10 or higher installed on your machine.
 

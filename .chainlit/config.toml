@@ -53,7 +53,7 @@ edit_message = true
 
 [UI]
 # Name of the assistant.
-name = "Fluencia"
+name = "Fluentia"
 
 # Description of the assistant. This is used for HTML tags.
 # description = ""

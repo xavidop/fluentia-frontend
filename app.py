@@ -116,7 +116,7 @@ async def text_to_speech(text: str, mime_type: str):
 @cl.on_chat_start
 async def start():
     await cl.Message(
-        content="Welcome to Fluencia. Press `p` to talk! Please select the scenario you want to practice.",
+        content="Welcome to Fluentia. Press `p` to talk! Please select the scenario you want to practice.",
         actions=actions
     ).send()
 
@@ -169,10 +169,10 @@ async def on_audio_end(elements: list[ElementBased]):
     ).send()
 
     result = await generate_text_answer(transcription)
-    fluencia_info = extract_fluencia_info(result)
+    fluentia_info = extract_fluentia_info(result)
 
     elements = [
-        cl.Text(name="Fluencia Information", content=fluencia_info, display="inline")
+        cl.Text(name="Fluentia Information", content=fluentia_info, display="inline")
     ]
     
     output_name, output_audio = await text_to_speech(result["nextInteraction"], audio_mime_type)
@@ -204,9 +204,9 @@ async def on_message(message: cl.Message):
         return
 
     result = await generate_text_answer(message.content)
-    fluencia_info = extract_fluencia_info(result)
+    fluentia_info = extract_fluentia_info(result)
     elements = [
-        cl.Text(name="Fluencia Information", content=fluencia_info, display="inline")
+        cl.Text(name="Fluentia Information", content=fluentia_info, display="inline")
     ]
     await cl.Message(
         content=result["nextInteraction"],
@@ -273,22 +273,22 @@ async def on_action(action: cl.Action):
             content=response.json()["result"],
         ).send()
 
-def extract_fluencia_info(result):
-    fluencia_info = ""
+def extract_fluentia_info(result):
+    fluentia_info = ""
 
     if "errors" in result and result["errors"] !="":
-        fluencia_info += "Errors detected: "+result["errors"]
+        fluentia_info += "Errors detected: "+result["errors"]
 
     if "solution" in result and result["solution"] !="":
-        fluencia_info += "\nCorrect Sentence: "+result["solution"]
+        fluentia_info += "\nCorrect Sentence: "+result["solution"]
 
     if "tip" in result and result["tip"] !="":
-        fluencia_info += "\nTip: "+result["tip"]
+        fluentia_info += "\nTip: "+result["tip"]
 
     if "sentiment" in result and result["sentiment"] !="":
-        fluencia_info += "\nSentiment: "+result["sentiment"]
+        fluentia_info += "\nSentiment: "+result["sentiment"]
 
     if "correctness" in result and result["correctness"] !="":
-        fluencia_info += "\nCorrectness: "+str(result["correctness"])
-    print(fluencia_info)
-    return fluencia_info
+        fluentia_info += "\nCorrectness: "+str(result["correctness"])
+    print(fluentia_info)
+    return fluentia_info
