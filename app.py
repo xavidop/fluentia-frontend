@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 from chainlit.element import ElementBased
 import chainlit as cl
 from dotenv import load_dotenv
+import requests
 
 load_dotenv()
 
@@ -13,12 +14,14 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LITERAL_API_KEY = os.getenv("LITERAL_API_KEY")
 SERVER_URL = os.getenv("SERVER_URL")
+SPEECHACE_API_KEY = os.getenv("SPEECHACE_API_KEY")
 
 print(ELEVENLABS_API_KEY)
 print(ELEVENLABS_VOICE_ID)
 print(OPENAI_API_KEY)
 print(LITERAL_API_KEY)
 print(SERVER_URL)
+print(SPEECHACE_API_KEY)
 
 cl.instrument_openai()
 
@@ -71,12 +74,32 @@ async def generate_text_answer(transcription):
         "userId": user.identifier,
         "sessionId":  sessionId,
         "scenarioId": scenraioId,
+        "language": cl.user_session.get("language"),
     }
     print("URL: "+url)
     async with httpx.AsyncClient(timeout=25.0) as client:
         response = await client.post(url, json=data, headers=headers)
         response.raise_for_status()  # Ensure we notice bad responses
         return response.json()["result"]
+    
+async def fluencyDetection(audioFile: str, user_id: str, dialect: str):
+    # Set the URL and parameters
+    url = "https://api.speechace.co/api/scoring/speech/v9/json"
+    params = {
+        "key": SPEECHACE_API_KEY,
+        "dialect": cl.user_session.get("locale"),
+        "user_id": user_id
+    }
+    # Define the file and additional data
+    files = {
+        "user_audio_file": open(audioFile, "rb")
+    }
+
+    # Send the POST request
+    response = requests.post(url, params=params, files=files)
+
+    # Print the response
+    print(response.json())
 
 async def text_to_speech(text: str, mime_type: str):
     CHUNK_SIZE = 1024
@@ -138,6 +161,34 @@ async def on_audio_chunk(chunk: cl.AudioChunk):
     # For now, write the chunks to a buffer and transcribe the whole audio at the end
     cl.user_session.get("audio_buffer").write(chunk.data)
 
+def storeAudioFile(audio_buffer):
+    # Specify the output file name
+    output_file = f".files/input/{audio_buffer.name}"
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    # Write the contents of the BytesIO object to the file
+    with open(output_file, "wb") as file:
+        file.write(audio_buffer.getvalue())
+
+    return output_file
+
+async def setLangueage(transcription):
+    url = f"{SERVER_URL}/v1/detectLanguage"
+    headers = {
+        "Content-Type": "application/json",
+        }
+
+    data = {
+        "input": transcription,
+    }
+    print("language set to: "+url)
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        response = await client.post(url, json=data, headers=headers)
+        response.raise_for_status()  # Ensure we notice bad responses
+        cl.user_session.set("locale", response.json()["result"]["locale"])
+        cl.user_session.set("language", response.json()["result"]["language"])
+    print("language set to: "+response.json()["result"]["language"])
+    print("locale set to: "+response.json()["result"]["locale"])
 
 @cl.on_audio_end
 async def on_audio_end(elements: list[ElementBased]):
@@ -158,8 +209,14 @@ async def on_audio_end(elements: list[ElementBased]):
     input_audio_el = cl.Audio(
         mime=audio_mime_type, content=audio_file, name=audio_buffer.name
     )
+
+    output_file = storeAudioFile(audio_buffer)
+
     whisper_input = (audio_buffer.name, audio_file, audio_mime_type)
     transcription = await speech_to_text(whisper_input)
+
+    if cl.user_session.get("language") == None:
+        await setLangueage(transcription)
 
     await cl.Message(
         author="You", 
@@ -174,7 +231,10 @@ async def on_audio_end(elements: list[ElementBased]):
     elements = [
         cl.Text(name="Fluentia Information", content=fluentia_info, display="inline")
     ]
-    
+    # Call to Speechace API to get the fluency information
+    await fluencyDetection(output_file, cl.user_session.get("user").identifier, "es-es")
+
+    # Generate audio response
     output_name, output_audio = await text_to_speech(result["nextInteraction"], audio_mime_type)
     
     output_audio_el = cl.Audio(
@@ -202,7 +262,8 @@ async def on_message(message: cl.Message):
             actions=actions
         ).send()
         return
-
+    if cl.user_session.get("language") == None:
+        await setLangueage(message.content)
     result = await generate_text_answer(message.content)
     fluentia_info = extract_fluentia_info(result)
     elements = [

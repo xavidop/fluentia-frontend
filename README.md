@@ -13,7 +13,7 @@ source venv/bin/activate
 ```
 Install the dependencies:
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 Run the project:
 ```bash
