@@ -60,7 +60,7 @@ async def speech_to_text(audio_file):
     return response.text
 
 
-async def generate_text_answer(transcription):
+async def generate_text_answer(transcription, fluency_info=None):
     user = cl.user_session.get("user")
     sessionId = cl.user_session.get("id")
     scenraioId = cl.user_session.get("scenario")
@@ -75,6 +75,7 @@ async def generate_text_answer(transcription):
         "sessionId":  sessionId,
         "scenarioId": scenraioId,
         "language": cl.user_session.get("language"),
+        "fluencyInfo": fluency_info != None and fluency_info or {}
     }
     print("URL: "+url)
     async with httpx.AsyncClient(timeout=25.0) as client:
@@ -82,13 +83,14 @@ async def generate_text_answer(transcription):
         response.raise_for_status()  # Ensure we notice bad responses
         return response.json()["result"]
     
-async def fluencyDetection(audioFile: str, user_id: str, dialect: str):
+async def fluencyDetection(audioFile: str, user_id: str):
     # Set the URL and parameters
     url = "https://api.speechace.co/api/scoring/speech/v9/json"
     params = {
         "key": SPEECHACE_API_KEY,
-        "dialect": cl.user_session.get("locale"),
-        "user_id": user_id
+        "dialect": cl.user_session.get("locale").lower(),
+        "user_id": user_id,
+        "include_ielts_feedback": "1"
     }
     # Define the file and additional data
     files = {
@@ -100,6 +102,7 @@ async def fluencyDetection(audioFile: str, user_id: str, dialect: str):
 
     # Print the response
     print(response.json())
+    return response.json()
 
 async def text_to_speech(text: str, mime_type: str):
     CHUNK_SIZE = 1024
@@ -207,7 +210,7 @@ async def on_audio_end(elements: list[ElementBased]):
     audio_mime_type: str = cl.user_session.get("audio_mime_type")
 
     input_audio_el = cl.Audio(
-        mime=audio_mime_type, content=audio_file, name=audio_buffer.name
+        mime=audio_mime_type, content=audio_file
     )
 
     output_file = storeAudioFile(audio_buffer)
@@ -225,20 +228,21 @@ async def on_audio_end(elements: list[ElementBased]):
         elements=[input_audio_el, *elements]
     ).send()
 
-    result = await generate_text_answer(transcription)
+    # Call to Speechace API to get the fluency information
+    fluency_info = await fluencyDetection(output_file, cl.user_session.get("user").identifier)
+
+    result = await generate_text_answer(transcription, fluency_info)
     fluentia_info = extract_fluentia_info(result)
 
     elements = [
         cl.Text(name="Fluentia Information", content=fluentia_info, display="inline")
     ]
-    # Call to Speechace API to get the fluency information
-    await fluencyDetection(output_file, cl.user_session.get("user").identifier, "es-es")
+
 
     # Generate audio response
     output_name, output_audio = await text_to_speech(result["nextInteraction"], audio_mime_type)
     
     output_audio_el = cl.Audio(
-        name=output_name,
         auto_play=True,
         mime=audio_mime_type,
         content=output_audio,
@@ -338,18 +342,20 @@ def extract_fluentia_info(result):
     fluentia_info = ""
 
     if "errors" in result and result["errors"] !="":
-        fluentia_info += "Errors detected: "+result["errors"]
+        fluentia_info += "**Errors detected:** "+result["errors"]
 
     if "solution" in result and result["solution"] !="":
-        fluentia_info += "\nCorrect Sentence: "+result["solution"]
+        fluentia_info += "\n**Correct Sentence:** "+result["solution"]
 
     if "tip" in result and result["tip"] !="":
-        fluentia_info += "\nTip: "+result["tip"]
+        fluentia_info += "\n**Tip:** "+result["tip"]
 
     if "sentiment" in result and result["sentiment"] !="":
-        fluentia_info += "\nSentiment: "+result["sentiment"]
+        fluentia_info += "\n**Sentiment:** "+result["sentiment"]
 
     if "correctness" in result and result["correctness"] !="":
-        fluentia_info += "\nCorrectness: "+str(result["correctness"])
+        fluentia_info += "\n**Correctness:** "+str(result["correctness"])
+    if "speechAndPronunciationFluency" in result and result["speechAndPronunciationFluency"] !="":
+        fluentia_info += "\**Speech and Pronunciation Fluency:** "+str(result["speechAndPronunciationFluency"])
     print(fluentia_info)
     return fluentia_info
