@@ -155,7 +155,6 @@ async def on_audio_start():
     try:
         scenario = cl.user_session.get("scenario")
         if scenario is None:
-            await cl.ErrorMessage(content=f"Failed to connect to OpenAI realtime: {e}").send()
             await cl.Message(
                 content="Please select a scenario first.",
                 actions=actions
