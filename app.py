@@ -170,8 +170,8 @@ async def on_audio_start():
 
 
 # Define a threshold for detecting silence and a timeout for ending a turn
-SILENCE_THRESHOLD = 2000  # Adjust based on your audio level (e.g., lower for quieter audio)
-SILENCE_TIMEOUT = 1000.0    # Seconds of silence to consider the turn finished
+SILENCE_THRESHOLD = 3500  # Adjust based on your audio level (e.g., lower for quieter audio)
+SILENCE_TIMEOUT = 1300.0    # Seconds of silence to consider the turn finished
 
 # Variables to track state
 last_elapsed_time = None
