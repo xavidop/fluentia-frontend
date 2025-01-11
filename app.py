@@ -1,11 +1,15 @@
 import os
-from io import BytesIO
+import io
+import wave
 import httpx
+import numpy as np
 from openai import AsyncOpenAI
 from chainlit.element import ElementBased
 import chainlit as cl
 from dotenv import load_dotenv
 import requests
+import uuid
+import audioop
 
 load_dotenv()
 
@@ -31,14 +35,14 @@ if not ELEVENLABS_API_KEY or not ELEVENLABS_VOICE_ID or not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY, ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID must be set")
 
 actions = [
-    cl.Action(name="Housing", value="1", description="Finding a Suitable House for Rent for Grad Students at a University"),
-    cl.Action(name="Educational Opportunities", value="2", description="Interview for Participation in a Cultural Program in the Yucatán Peninsula, Mexico"),
-    cl.Action(name="Health and Wellness", value="3", description="Discussing Health Issues at a University Health Facility in a Spanish-Speaking Country"),
-    cl.Action(name="Zoom Interview", value="4", description="virtual format of a Zoom interview practice session, highlighting the importance of clear communication in Spanish, preparation for professional settings, and useful feedback from the career counselor")
+    cl.Action(name="Housing", payload={"key": "1"}, tooltip="Finding a Suitable House for Rent for Grad Students at a University"),
+    cl.Action(name="Educational Opportunities", payload={"key": "2"}, tooltip="Interview for Participation in a Cultural Program in the Yucatán Peninsula, Mexico"),
+    cl.Action(name="Health and Wellness", payload={"key": "3"}, tooltip="Discussing Health Issues at a University Health Facility in a Spanish-Speaking Country"),
+    cl.Action(name="Zoom Interview", payload={"key": "4"}, tooltip="virtual format of a Zoom interview practice session, highlighting the importance of clear communication in Spanish, preparation for professional settings, and useful feedback from the career counselor")
 ]
 
 actionsSummary = [
-    cl.Action(name="Summary", value="summary", description="Summarize the conversation"),
+    cl.Action(name="Summary", payload={"key": "summary"}, tooltip="Summarize the conversation"),
 ]
 
 @cl.password_auth_callback
@@ -128,7 +132,7 @@ async def text_to_speech(text: str, mime_type: str):
         response = await client.post(url, json=data, headers=headers)
         response.raise_for_status()  # Ensure we notice bad responses
 
-        buffer = BytesIO()
+        buffer = io.BytesIO()
         buffer.name = f"output_audio.{mime_type.split('/')[1]}"
 
         async for chunk in response.aiter_bytes(chunk_size=CHUNK_SIZE):
@@ -146,32 +150,82 @@ async def start():
         actions=actions
     ).send()
 
+@cl.on_audio_start
+async def on_audio_start():
+    try:
+        scenario = cl.user_session.get("scenario")
+        if scenario is None:
+            await cl.ErrorMessage(content=f"Failed to connect to OpenAI realtime: {e}").send()
+            await cl.Message(
+                content="Please select a scenario first.",
+                actions=actions
+            ).send()
+            return False
+        else:
+            cl.user_session.set("audio_chunks", [])
+            return True
+    except Exception as e:
+        await cl.ErrorMessage(content=f"Failed to connect to OpenAI realtime: {e}").send()
+        return False
+
+
+# Define a threshold for detecting silence and a timeout for ending a turn
+SILENCE_THRESHOLD = 2000  # Adjust based on your audio level (e.g., lower for quieter audio)
+SILENCE_TIMEOUT = 1000.0    # Seconds of silence to consider the turn finished
+
+# Variables to track state
+last_elapsed_time = None
+silent_duration_ms = 0
+is_speaking = False
 
 @cl.on_audio_chunk
-async def on_audio_chunk(chunk: cl.AudioChunk):
+async def on_audio_chunk(chunk: cl.InputAudioChunk):
+    audio_chunks = cl.user_session.get("audio_chunks")
 
-    if chunk.isStart:
-        buffer = BytesIO()
-        # This is required for whisper to recognize the file type
-        buffer.name = f"input_audio.{chunk.mimeType.split('/')[1]}"
-        # Initialize the session for a new audio stream
-        cl.user_session.set("audio_buffer", buffer)
-        cl.user_session.set("audio_mime_type", chunk.mimeType)
+    global last_elapsed_time, silent_duration_ms, is_speaking
 
-    # TODO: Use Gladia to transcribe chunks as they arrive would decrease latency
-    # see https://docs-v1.gladia.io/reference/live-audio
+    # If this is the first chunk, initialize timers and state
+    if last_elapsed_time is None:
+        last_elapsed_time = chunk.elapsedTime
+        is_speaking = True
+        print("Audio stream started")
+        return
+    # Calculate the time difference between this chunk and the previous one
+    time_diff_ms = chunk.elapsedTime - last_elapsed_time
+    last_elapsed_time = chunk.elapsedTime
+
+    # Compute the RMS (root mean square) energy of the audio chunk
+    audio_energy = audioop.rms(chunk.data, 2)  # Assumes 16-bit audio (2 bytes per sample)
+
+    if audio_energy < SILENCE_THRESHOLD:
+        # Audio is considered silent
+        silent_duration_ms += time_diff_ms
+        if silent_duration_ms >= SILENCE_TIMEOUT and is_speaking:
+            print("Turn finished: Silence detected")
+            is_speaking = False
+            print("Processing audio")
+            await process_audio()
+    else:
+        # Audio is not silent, reset silence timer and mark as speaking
+        silent_duration_ms = 0
+        if not is_speaking:
+            print("Speaking resumed")
+            is_speaking = True
+
     
-    # For now, write the chunks to a buffer and transcribe the whole audio at the end
-    cl.user_session.get("audio_buffer").write(chunk.data)
+    if audio_chunks is not None:
+        audio_chunk= np.frombuffer(chunk.data, dtype=np.int16)
+        audio_chunks.append(audio_chunk)
+
 
 def storeAudioFile(audio_buffer):
     # Specify the output file name
-    output_file = f".files/input/{audio_buffer.name}"
+    output_file = f".files/input/input_audio"+str(uuid.uuid4())+".wav"
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
 
     # Write the contents of the BytesIO object to the file
     with open(output_file, "wb") as file:
-        file.write(audio_buffer.getvalue())
+        file.write(audio_buffer)
 
     return output_file
 
@@ -194,28 +248,39 @@ async def setLangueage(transcription):
     print("locale set to: "+response.json()["result"]["locale"])
 
 @cl.on_audio_end
-async def on_audio_end(elements: list[ElementBased]):
-    scenario = cl.user_session.get("scenario")
-    if scenario is None:
-        await cl.Message(
-            content="Please select a scenario first.",
-            actions=actions
-        ).send()
-        return
+async def on_audio_end():
+    print("Audio stream ended")
+    #await process_audio()
+
+async def process_audio():
 
     # Get the audio buffer from the session
-    audio_buffer: BytesIO = cl.user_session.get("audio_buffer")
-    audio_buffer.seek(0)  # Move the file pointer to the beginning
-    audio_file = audio_buffer.read()
-    audio_mime_type: str = cl.user_session.get("audio_mime_type")
+    if audio_chunks:=cl.user_session.get("audio_chunks"):
+       # Concatenate all chunks
+        concatenated = np.concatenate(list(audio_chunks))
+        
+        # Create an in-memory binary stream
+        wav_buffer = io.BytesIO()
+        
+        # Create WAV file with proper parameters
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # mono
+            wav_file.setsampwidth(2)  # 2 bytes per sample (16-bit)
+            wav_file.setframerate(24000)  # sample rate (24kHz PCM)
+            wav_file.writeframes(concatenated.tobytes())
+        
+        # Reset buffer position
+        wav_buffer.seek(0)
+        
+        cl.user_session.set("audio_chunks", [])
 
-    input_audio_el = cl.Audio(
-        mime=audio_mime_type, content=audio_file
-    )
+    audio_buffer = wav_buffer.getvalue()
+
+    input_audio_el = cl.Audio(content=audio_buffer, mime="audio/wav", )
 
     output_file = storeAudioFile(audio_buffer)
 
-    whisper_input = (audio_buffer.name, audio_file, audio_mime_type)
+    whisper_input = ("audio.wav", audio_buffer, "audio/wav")
     transcription = await speech_to_text(whisper_input)
 
     if cl.user_session.get("language") == None:
@@ -225,7 +290,7 @@ async def on_audio_end(elements: list[ElementBased]):
         author="You", 
         type="user_message",
         content=transcription,
-        elements=[input_audio_el, *elements]
+        elements=[input_audio_el]
     ).send()
 
     # Call to Speechace API to get the fluency information
@@ -240,11 +305,11 @@ async def on_audio_end(elements: list[ElementBased]):
 
 
     # Generate audio response
-    output_name, output_audio = await text_to_speech(result["nextInteraction"], audio_mime_type)
+    output_name, output_audio = await text_to_speech(result["nextInteraction"], "audio/wav")
     
     output_audio_el = cl.Audio(
         auto_play=True,
-        mime=audio_mime_type,
+        mime="audio/wav",
         content=output_audio,
     )
     answer_message = await cl.Message(
@@ -283,7 +348,7 @@ async def on_message(message: cl.Message):
 @cl.action_callback("Housing")
 async def on_action(action: cl.Action):
 
-    cl.user_session.set("scenario", action.value)
+    cl.user_session.set("scenario", action.payload["key"])
 
     await cl.Message(
         content="Perfect, let's start! Ask me a question about housing. in the language you want to practice.",
@@ -292,7 +357,7 @@ async def on_action(action: cl.Action):
 @cl.action_callback("Educational Opportunities")
 async def on_action(action: cl.Action):
 
-    cl.user_session.set("scenario", action.value)
+    cl.user_session.set("scenario", action.payload["key"])
 
     await cl.Message(
         content="Perfect, let's start! Ask me a question about Educational Opportunities. in the language you want to practice.",
@@ -301,7 +366,7 @@ async def on_action(action: cl.Action):
 @cl.action_callback("Health and Wellness")
 async def on_action(action: cl.Action):
 
-    cl.user_session.set("scenario", action.value)
+    cl.user_session.set("scenario", action.payload["key"])
 
     await cl.Message(
         content="Perfect, let's start! Ask me a question about Health and Wellness. in the language you want to practice.",
@@ -310,7 +375,7 @@ async def on_action(action: cl.Action):
 @cl.action_callback("Zoom Interview")
 async def on_action(action: cl.Action):
 
-    cl.user_session.set("scenario", action.value)
+    cl.user_session.set("scenario", action.payload["key"])
 
     await cl.Message(
         content="Perfect, let's start this interview! what is your name?. in the language you want to practice.",
