@@ -203,7 +203,7 @@ async def on_audio_chunk(chunk: cl.InputAudioChunk):
             print("Turn finished: Silence detected")
             is_speaking = False
             print("Processing audio")
-            #await process_audio()
+            await process_audio()
     else:
         # Audio is not silent, reset silence timer and mark as speaking
         silent_duration_ms = 0
