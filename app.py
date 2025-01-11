@@ -170,8 +170,8 @@ async def on_audio_start():
 
 
 # Define a threshold for detecting silence and a timeout for ending a turn
-SILENCE_THRESHOLD = 3500  # Adjust based on your audio level (e.g., lower for quieter audio)
-SILENCE_TIMEOUT = 1300.0    # Seconds of silence to consider the turn finished
+SILENCE_THRESHOLD = 3000  # Adjust based on your audio level (e.g., lower for quieter audio)
+SILENCE_TIMEOUT = 2000.0    # Seconds of silence to consider the turn finished
 
 # Variables to track state
 last_elapsed_time = None
@@ -204,7 +204,7 @@ async def on_audio_chunk(chunk: cl.InputAudioChunk):
             print("Turn finished: Silence detected")
             is_speaking = False
             print("Processing audio")
-            await process_audio()
+            #await process_audio()
     else:
         # Audio is not silent, reset silence timer and mark as speaking
         silent_duration_ms = 0
