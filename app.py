@@ -162,6 +162,8 @@ async def on_audio_start():
             return False
         else:
             cl.user_session.set("audio_chunks", [])
+            cl.user_session.set("silent_duration_ms", 0)
+            cl.user_session.set("is_speaking", False)
             return True
     except Exception as e:
         await cl.ErrorMessage(content=f"Failed to connect to OpenAI realtime: {e}").send()
@@ -169,29 +171,32 @@ async def on_audio_start():
 
 
 # Define a threshold for detecting silence and a timeout for ending a turn
-SILENCE_THRESHOLD = 500  # Adjust based on your audio level (e.g., lower for quieter audio)
-SILENCE_TIMEOUT = 2000.0    # Seconds of silence to consider the turn finished
-
-# Variables to track state
-last_elapsed_time = None
-silent_duration_ms = 0
-is_speaking = False
+SILENCE_THRESHOLD = 1500  # Adjust based on your audio level (e.g., lower for quieter audio)
+SILENCE_TIMEOUT = 1500.0    # Seconds of silence to consider the turn finished
 
 @cl.on_audio_chunk
 async def on_audio_chunk(chunk: cl.InputAudioChunk):
     audio_chunks = cl.user_session.get("audio_chunks")
 
-    global last_elapsed_time, silent_duration_ms, is_speaking
+    if audio_chunks is not None:
+        audio_chunk = np.frombuffer(chunk.data, dtype=np.int16)
+        audio_chunks.append(audio_chunk)
 
     # If this is the first chunk, initialize timers and state
-    if last_elapsed_time is None:
-        last_elapsed_time = chunk.elapsedTime
-        is_speaking = True
+    if chunk.isStart:
+        cl.user_session.set("last_elapsed_time", chunk.elapsedTime)
+        cl.user_session.set("is_speaking", True)
         print("Audio stream started")
         return
+    
     # Calculate the time difference between this chunk and the previous one
+    audio_chunks = cl.user_session.get("audio_chunks")
+    last_elapsed_time = cl.user_session.get("last_elapsed_time")
+    silent_duration_ms = cl.user_session.get("silent_duration_ms")
+    is_speaking = cl.user_session.get("is_speaking")
+
     time_diff_ms = chunk.elapsedTime - last_elapsed_time
-    last_elapsed_time = chunk.elapsedTime
+    cl.user_session.set("last_elapsed_time", chunk.elapsedTime)
 
     # Compute the RMS (root mean square) energy of the audio chunk
     audio_energy = audioop.rms(chunk.data, 2)  # Assumes 16-bit audio (2 bytes per sample)
@@ -199,23 +204,18 @@ async def on_audio_chunk(chunk: cl.InputAudioChunk):
     if audio_energy < SILENCE_THRESHOLD:
         # Audio is considered silent
         silent_duration_ms += time_diff_ms
+        cl.user_session.set("silent_duration_ms", silent_duration_ms)
         if silent_duration_ms >= SILENCE_TIMEOUT and is_speaking:
             print("Turn finished: Silence detected")
-            is_speaking = False
+            cl.user_session.set("is_speaking", False)
             print("Processing audio")
             await process_audio()
     else:
         # Audio is not silent, reset silence timer and mark as speaking
-        silent_duration_ms = 0
+        cl.user_session.set("silent_duration_ms", 0)
         if not is_speaking:
             print("Speaking resumed")
-            is_speaking = True
-
-    
-    if audio_chunks is not None:
-        audio_chunk= np.frombuffer(chunk.data, dtype=np.int16)
-        audio_chunks.append(audio_chunk)
-
+            cl.user_session.set("is_speaking", True)
 
 def storeAudioFile(audio_buffer):
     # Specify the output file name
@@ -249,7 +249,6 @@ async def setLangueage(transcription):
 @cl.on_audio_end
 async def on_audio_end():
     print("Audio stream ended")
-    #await process_audio()
 
 async def process_audio():
 
@@ -420,6 +419,6 @@ def extract_fluentia_info(result):
     if "correctness" in result and result["correctness"] !="":
         fluentia_info += "\n**Correctness:** "+str(result["correctness"])
     if "speechAndPronunciationFluency" in result and result["speechAndPronunciationFluency"] !="":
-        fluentia_info += "\**Speech and Pronunciation Fluency:** "+str(result["speechAndPronunciationFluency"])
+        fluentia_info += "\n**Speech and Pronunciation Fluency:** "+str(result["speechAndPronunciationFluency"])
     print(fluentia_info)
     return fluentia_info
